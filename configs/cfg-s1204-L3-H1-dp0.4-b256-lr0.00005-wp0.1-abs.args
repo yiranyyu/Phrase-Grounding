@@ -1,0 +1,5 @@
+--bert-img-layers 3
+--bert-img-heads 1
+--bert-img-hidden-dp 0.4
+--bert-img-attention-dp 0.4
+--bert-img-spatial abs

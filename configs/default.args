@@ -1,0 +1,6 @@
+-s 1204
+--split train,test
+--bs 256
+--grad-acc-steps 2
+--lr 0.00005
+--warmup 0.1

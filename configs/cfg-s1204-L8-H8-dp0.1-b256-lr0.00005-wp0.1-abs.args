@@ -1,0 +1,6 @@
+--bert-img-layers 8
+--bert-img-heads 8
+--bert-img-hidden-dp 0.1
+--bert-img-attention-dp 0.1
+--bert-img-spatial abs
+--max-grad-norm 1
