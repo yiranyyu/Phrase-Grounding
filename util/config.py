@@ -1,6 +1,6 @@
 import json
-from pathlib import Path
 import pprint
+from pathlib import Path
 
 
 class Config(dict):

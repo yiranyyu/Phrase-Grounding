@@ -1,6 +1,8 @@
-import torch
 import random
+import subprocess
+
 import numpy as np
+import torch
 
 
 def cuda_is_available():
@@ -28,7 +30,6 @@ def cuda_device_count(python_interpreter='python'):
     if key in os.environ:
         return len(os.environ[key].split(','))
     else:
-        import subprocess
         return int(subprocess.getoutput(f"{python_interpreter} -c 'import torch as th; print(th.cuda.device_count())'"))
 
 

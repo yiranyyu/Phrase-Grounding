@@ -1,10 +1,12 @@
 from pathlib import Path
-from util.config import Config
-from util.argparse import ArgumentParser
-from util.app import run
+
 from numpy import format_float_positional as strf
+
 import util.runner as runner
 from util import logging
+from util.app import run
+from util.argparse import ArgumentParser
+from util.config import Config
 
 
 def parse_args(argv=None):
@@ -48,7 +50,7 @@ def parse_args(argv=None):
     # Training and Testing
     parser.add_argument("--fp16", action="store_true",
                         help="Whether to enable 16-bit float precision instead of 32-bit.", )
-    parser.add_argument("--epochs", type=int, default=9, help="Number of training epochs")
+    parser.add_argument("--epochs", type=int, default=7, help="Number of training epochs")
     parser.add_argument("--bs", type=str, default="256", help="batch size for each split")
     parser.add_argument("--grad-acc-steps", type=int, default=2,
                         help="Number of steps to accumulate gradients before an update pass to save memory.", )

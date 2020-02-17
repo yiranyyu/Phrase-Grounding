@@ -1,5 +1,5 @@
-from torch import nn
 import torch as th
+from torch import nn
 
 from util import logging
 
@@ -49,27 +49,30 @@ def parallelize(module, device_ids=None, distributed=False):
             list: int GPU device ids
     """
 
-    available = list(range(th.cuda.device_count()))
-    if device_ids is None:
-        device_ids = available
-    elif isinstance(device_ids, str):
-        # number or comma separated list
-        device_ids = (
-            available[-int(device_ids):]
-            if device_ids.isnumeric()
-            else [int(i) for i in device_ids.split(",")]
-        )
-    assert all(
-        i in available for i in device_ids
-    ), f"Not all requested GPUs {device_ids} are available in {available}"
-
-    device = th.device(f"cuda:{device_ids[0]}") if device_ids else th.device("cpu")
+    # available = list(range(th.cuda.device_count()))
+    # if device_ids is None:
+    #     device_ids = available
+    # elif isinstance(device_ids, str):
+    #     # number or comma separated list
+    #     device_ids = (
+    #         available[-int(device_ids) :]
+    #         if device_ids.isnumeric()
+    #         else [int(i) for i in device_ids.split(",")]
+    #     )
+    # assert all(
+    #     i in available for i in device_ids
+    # ), f"Not all requested GPUs {device_ids} are available in {available}"
+    # print(f'using {device_ids} GPU', flush=True)
+    device = th.device(f"cuda:0") if device_ids else th.device("cpu")
+    # print(f'first move module to {device}')
     module.to(device)
+    # print('Moved!')
     if distributed:
         # TODO: testing
         return DistributedDataParallel(module)
     elif len(device_ids) > 1:
-        module = nn.DataParallel(module, device_ids)
+        # module = nn.DataParallel(module, device_ids)
         logging.info(f"Parallelized module on GPUs: {device_ids}")
+        module = nn.DataParallel(module)
 
     return module, device

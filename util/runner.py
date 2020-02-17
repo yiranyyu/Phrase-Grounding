@@ -1,17 +1,17 @@
 import numpy as np
 import torch as th
+from ignite.engine import Engine, Events, create_supervised_trainer, create_supervised_evaluator
+from ignite.exceptions import NotComputableError
+from ignite.handlers import ModelCheckpoint, EarlyStopping, TerminateOnNan, Timer
+from ignite.metrics import Metric
+from ignite.utils import convert_tensor
 from torch.utils.data import DataLoader
 
 from dataset.flickr30k_entities import Flickr30kEntities
-from util.visdom import vis_init, vis_create
-from ignite.utils import convert_tensor
-from ignite.engine import Engine, Events, create_supervised_trainer, create_supervised_evaluator
-from ignite.handlers import ModelCheckpoint, EarlyStopping, TerminateOnNan, Timer
-from ignite.exceptions import NotComputableError
 from models import bert
-from ignite.metrics import Metric
 from util import logging
 from util.utils import set_random_seed
+from util.visdom import vis_create
 
 
 class BCELoss(Metric):
@@ -179,9 +179,9 @@ def setup_model(cfg):
         model.load(cfg.resume)
         logging.info(f"{cfg.resume}")
 
-    from ml import nn
+    from util.parallel import parallelize
 
-    return nn.parallelize(model, device_ids=cfg.gpu)
+    return parallelize(model, device_ids=cfg.gpu)
 
 
 def prepare_train(cfg):
@@ -211,10 +211,10 @@ def prepare_train(cfg):
                 "weight_decay": 0.0,
             },
         ]
-        from ml.nlp import bert
+        from pytorch_pretrained_bert import BertAdam
 
         num_opt_steps = len(train_loader.dataset) // cfg.bs[0] * cfg.epochs
-        optim = bert.BertAdam(
+        optim = BertAdam(
             gparams,
             lr=cfg.lr,
             warmup=cfg.warmup,

@@ -1,19 +1,20 @@
 import math
 
-from torch import nn
-from torch.nn import functional as F
 import torch as th
-
-from ml.nlp import bert
-from ml.nlp.bert import (
+from pytorch_pretrained_bert import (
     BertConfig,
-    BertPooler,
-    BertLayerNorm,
-    BertEncoder,
-
-    BertPreTrainedModel,
     BertModel,
 )
+from pytorch_pretrained_bert.modeling import (
+    BertLayerNorm,
+    BertPooler,
+    BertEncoder,
+    BertPreTrainedModel
+)
+from torch import nn
+from torch.nn import functional as F
+
+from models.nlp import bert
 
 
 def select(logits, target):
@@ -259,7 +260,6 @@ class BertForGrounding(nn.Module):
 
         if mask is None:
             mask = th.ones(features.shape[0:2])
-        rois = mask.sum(dim=1)
         extended_mask = mask.unsqueeze(1).unsqueeze(2)
         extended_mask = extended_mask.to(dtype=next(self.parameters()).dtype)
         extended_mask = (1.0 - extended_mask) * -10000.0

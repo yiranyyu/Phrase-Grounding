@@ -1,17 +1,12 @@
 import torch
 from torch import nn
-from torchvision.ops.misc import FrozenBatchNorm2d
+from torchvision.models.detection.backbone_utils import BackboneWithFPN
 from torchvision.models.resnet import (
-    _resnet,
-    resnet50 as _resnet50,
-    resnet101 as _resnet101,
-    resnext50_32x4d as _resnext50_32x4d,
-    resnext101_32x8d as _resnext101_32x8d)
-from torchvision.models.detection.backbone_utils import resnet_fpn_backbone, BackboneWithFPN
-from torchvision.models.resnet import (
-    BasicBlock,
     Bottleneck,
 )
+from torchvision.models.resnet import (
+    _resnet)
+from torchvision.ops.misc import FrozenBatchNorm2d
 
 
 class Backbone(nn.Module):

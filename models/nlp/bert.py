@@ -1,19 +1,12 @@
 import os
 from pathlib import Path
-import torch
+
 import pytorch_pretrained_bert as BERT
+import torch
 from pytorch_pretrained_bert import (
-    BertConfig,
     BertTokenizer,
-    BertModel,
-    BertForSequenceClassification,
-    BertAdam,
 )
 from pytorch_pretrained_bert.modeling import (
-    BertLayerNorm,
-    BertPooler,
-    BertEncoder,
-    BertPreTrainedModel,
     WEIGHTS_NAME,
     CONFIG_NAME,  # 0.6.1
 )

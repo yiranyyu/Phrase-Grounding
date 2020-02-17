@@ -1,10 +1,10 @@
+import collections
+import math
+import queue
 import re
 import sys
-import math
-import traceback
 import threading
-import collections
-import queue
+import traceback
 
 import torch
 import torch.multiprocessing as mp

@@ -1,19 +1,19 @@
-import torch.nn.functional as F
-import torch
-import numpy as np
-from collections import defaultdict, OrderedDict
 import base64
-import pickle
-import h5py
 import csv
+import pickle
 import re
 import sys
-
+from collections import defaultdict, OrderedDict
 from pathlib import Path
 from typing import List, Dict
 from xml.etree.ElementTree import parse
-from tqdm import tqdm
+
+import h5py
+import numpy as np
+import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 import util.logging as logging
 from util import iou
@@ -388,7 +388,7 @@ class Flickr30kEntities(Dataset):
 
     def __getitem__(self, index):
         entry = self.img_cap_entries[index]
-        imgidx = entry['img_idx']
+        imgidx = entry['imgidx']
         start, end = self.offsets[imgidx]
         rois = (end - start).item()
         features = self.features[start:end, :]
