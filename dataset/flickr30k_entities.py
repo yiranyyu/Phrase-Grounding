@@ -388,7 +388,7 @@ class Flickr30kEntities(Dataset):
 
     def __getitem__(self, index):
         entry = self.img_cap_entries[index]
-        imgidx = entry['imgidx']
+        imgidx = entry['img_idx']
         start, end = self.offsets[imgidx]
         rois = (end - start).item()
         features = self.features[start:end, :]
