@@ -4,26 +4,12 @@ from torch.utils.data import DataLoader
 
 from dataset.flickr30k_entities import Flickr30kEntities, lastTokenIndex
 from util import logging
-from models.bert import IBertConfig, BertForGrounding
+from models.bert import IBertConfig, BertForGrounding, select
 import copy
 import cv2
 from models.nlp import bert
 
-logger = logging.getLogger(__name__)
 RED = (0, 0, 255)
-
-
-def select(logits, target):
-    """Select grounded entity RoIs by indices throughout batch.
-    """
-    indices, labels, types = target
-    # print(f"logits={logits.shape}, indices={indices.shape}, labels={labels.shape}")
-    logits = torch.cat(tuple(b[indices[i][indices[i] >= 0]] for i, b in enumerate(logits)))
-    target = torch.cat(tuple(b[:(indices[i] >= 0).sum()] for i, b in enumerate(labels)))
-    types = torch.cat(tuple(b[:(indices[i] >= 0).sum()] for i, b in enumerate(types)))
-    entities = (indices >= 0).sum().item()
-    # print(f"selected logits={logits.shape}, target={target.shape}, entities={entities}")
-    return logits, target, entities, types
 
 
 def img_read_if_str(img):
@@ -178,15 +164,15 @@ if __name__ == '__main__':
         attention_probs_dropout_prob=0.4,
         spatial='abs',
     )
-    logger.info('Initializing model ...')
+    logging.info('Initializing model ...')
     model = BertForGrounding(cfgI).eval()
     model.load(output_prefix / 'model' / model_name, map_location=torch.device('cpu'))
-    logger.info('Model loaded.')
+    logging.info('Model loaded.')
 
-    logger.info('Loading dataset ...')
+    logging.info('Loading dataset ...')
     flickr30k_dir = Path('./data/flickr30k_entities')
     dataset = Flickr30kEntities('test', flickr30k_dir, 'bert', training=False)
-    logger.info('Dataset loaded.')
+    logging.info('Dataset loaded.')
 
     data_loader = DataLoader(dataset, batch_size=1, shuffle=False)  # bs must be 1 to avoid entity trunc
     for batch in data_loader:

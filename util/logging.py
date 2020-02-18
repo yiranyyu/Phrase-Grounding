@@ -1,4 +1,5 @@
 import logging
+from logging import *
 
 FMT = "[%(asctime)s] %(levelname)s: %(message)s"
 DATEFMT = "%m/%d/%Y %H:%M:%S"
