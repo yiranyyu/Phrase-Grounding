@@ -1,6 +1,4 @@
-import math
-
-import torch as th
+import torch
 from pytorch_pretrained_bert import (
     BertConfig,
     BertModel,
@@ -11,10 +9,10 @@ from pytorch_pretrained_bert.modeling import (
     BertEncoder,
     BertPreTrainedModel
 )
-from torch import nn
 from torch.nn import functional as F
 
 from models.nlp import bert
+from models.bert.modal_fusion import *
 
 
 def select(logits, target):
@@ -22,9 +20,9 @@ def select(logits, target):
     """
     indices, labels, types = target
     # print(f"logits={logits.shape}, indices={indices.shape}, labels={labels.shape}")
-    logits = th.cat(tuple(b[indices[i][indices[i] >= 0]] for i, b in enumerate(logits)))
-    target = th.cat(tuple(b[:(indices[i] >= 0).sum()] for i, b in enumerate(labels)))
-    types = th.cat(tuple(b[:(indices[i] >= 0).sum()] for i, b in enumerate(types)))
+    logits = torch.cat(tuple(b[indices[i][indices[i] >= 0]] for i, b in enumerate(logits)))
+    target = torch.cat(tuple(b[:(indices[i] >= 0).sum()] for i, b in enumerate(labels)))
+    types = torch.cat(tuple(b[:(indices[i] >= 0).sum()] for i, b in enumerate(types)))
     entities = (indices >= 0).sum().item()
     # print(f"selected logits={logits.shape}, target={target.shape}, entities={entities}")
     return logits, target, entities, types
@@ -58,13 +56,15 @@ def BCE_with_logits(logits, target):
     return bce_with_logits(logits, target, reduction='sum') / E, E
 
 
-def recall(logits, target, topk=[1, 5, 10], typeN=8):
+# noinspection PyArgumentList
+def recall(logits, target, topk=(1, 5, 10), typeN=8):
     """Compute top K recalls of a batch.
 
     Args:
         logits (B x max_entities, B x max_entities x max_rois):
         target (B x max_entities, B x max_entities x max_rois):
         topk: top k recalls to compute
+        typeN: number of types
 
     Returns:
         N: number of entities in the batch
@@ -76,22 +76,22 @@ def recall(logits, target, topk=[1, 5, 10], typeN=8):
     topk = [topk] if isinstance(topk, int) else sorted(topk)
     TPs = [0] * len(topk)
     bound = target.max(-1, False)[0].sum().item()  # at least one detected
-    typeTPs = th.zeros(typeN, device=types.device)
-    typeN = th.zeros_like(typeTPs)
+    typeTPs = torch.zeros(typeN, device=types.device)
+    typeN = torch.zeros_like(typeTPs)
 
     # print("target entity type count: ", types.shape, types.sum(dim=0), target.shape)
     if max(topk) == 1:
-        top1 = th.argmax(logits, dim=1)
-        one_hots = th.zeros_like(target)
+        top1 = torch.argmax(logits, dim=1)
+        one_hots = torch.zeros_like(target)
         one_hots.scatter_(1, top1.view(-1, 1), 1)
         TPs = (one_hots * target).sum().item()
         hits = (one_hots * target).sum(dim=1) >= 1
         typeTPs += types[hits].sum(dim=0)
         typeN += types.sum(dim=0)
     else:
-        logits = th.sort(logits, 1, descending=True)[1]
+        logits = torch.sort(logits, 1, descending=True)[1]
         for i, k in enumerate(topk):
-            one_hots = th.zeros_like(target)
+            one_hots = torch.zeros_like(target)
             one_hots.scatter_(1, logits[:, :k], 1)
             TPs[i] = ((one_hots * target).sum(dim=1) >= 1).float().sum().item()  # hit if at least one matched
             if i == 0:
@@ -102,7 +102,7 @@ def recall(logits, target, topk=[1, 5, 10], typeN=8):
     # print(TPs, N)
     # print(typeTPs)
     # print(typeN)
-    return N, th.Tensor(TPs + [bound]), (typeTPs.cpu(), typeN.cpu())
+    return N, torch.Tensor(TPs + [bound]), (typeTPs.cpu(), typeN.cpu())
 
 
 class IBertConfig(BertConfig):
@@ -189,9 +189,9 @@ class IBertModel(BertPreTrainedModel):
             self, features, spatials, attention_mask=None, output_all_encoded_layers=True
     ):
         if attention_mask is None:
-            attention_mask = th.ones(features.shape[0:2])
+            attention_mask = torch.ones(features.shape[0:2])
 
-        rois = attention_mask.sum(dim=1)
+        # rois = attention_mask.sum(dim=1)
         extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
         extended_attention_mask = extended_attention_mask.to(
             dtype=next(self.parameters()).dtype
@@ -213,53 +213,20 @@ class IBertModel(BertPreTrainedModel):
         return encoded_layers, pooled_output
 
 
-class Grounding(nn.Module):
-    def __init__(self, cfgT, cfgI, heads=1):
-        super(Grounding, self).__init__()
-        projection = cfgI.hidden_size // 2
-        self.num_attention_heads = heads
-        self.attention_head_size = int(projection // self.num_attention_heads)
-        self.all_head_size = self.num_attention_heads * self.attention_head_size
-
-        self.Q = nn.Linear(cfgT.hidden_size, self.all_head_size)
-        self.K = nn.Linear(cfgI.hidden_size, self.all_head_size)
-        self.cfgT = cfgT
-        self.cfgI = cfgI
-        # self.dropout = nn.Dropout(cfgI.attention_probs_dropout_prob)
-
-    def transpose(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        x = x.view(*new_x_shape)  # B x #tokens x #heads x head_size
-        return x.permute(0, 2, 1, 3)  # B x #heads x # tokens x head_size
-
-    def forward(self, encT, encI, mask):
-        Q = self.Q(encT)
-        K = self.K(encI)
-        Q = self.transpose(Q)
-        K = self.transpose(K)
-
-        logits = th.matmul(Q, K.transpose(-1, -2))
-        logits = logits / math.sqrt(self.attention_head_size)
-        logits = logits + mask
-        return logits.squeeze()
-        # scores = nn.Sigmoid(logits)
-        # return scores
-
-
 class BertForGrounding(nn.Module):
     def __init__(self, cfgI):
         super(BertForGrounding, self).__init__()
         bert.setup(base=True, uncased=True)
         self.tBert = BertModel.from_pretrained(bert.pretrained())
         self.iBert = IBertModel(cfgI)
-        self.grounding = Grounding(self.tBert.config, self.iBert.config)
+        self.grounding = ModalFusionConcatenateGrounding(self.tBert.config, self.iBert.config)
 
     def forward(self, batch):
         features, spatials, mask, token_ids, token_segs, token_mask = batch
         encT, _ = self.tBert(token_ids, token_segs, token_mask, output_all_encoded_layers=False)
 
         if mask is None:
-            mask = th.ones(features.shape[0:2])
+            mask = torch.ones(features.shape[0:2])
         extended_mask = mask.unsqueeze(1).unsqueeze(2)
         extended_mask = extended_mask.to(dtype=next(self.parameters()).dtype)
         extended_mask = (1.0 - extended_mask) * -10000.0
@@ -280,8 +247,8 @@ class BertForGrounding(nn.Module):
         self.iBert.config = states["iBert.config"]
 
     def save(self, path):
-        th.save(self.state_dict(), path)
+        torch.save(self.state_dict(), path)
 
     def load(self, path):
-        states = th.load(path)
+        states = torch.load(path)
         self.load_state_dict(states)
