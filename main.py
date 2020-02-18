@@ -58,6 +58,7 @@ def parse_args(argv=None):
     parser.add_argument("--warmup", default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup e.g., 0.1 = 10%% of "
                              "training.", )
+    parser.add_argument('--model_name_prefix', help='Name prefix of model to be stored')
 
     # Optimizer specific
     parser.add_argument("--optim", type=str, default="adam",
@@ -101,7 +102,7 @@ def setup(config):
 
     config.root = Path(__file__).resolve().parent
     config.data = config.root / config.data
-    config.model = f"{config.arch}-{config.optim}-s{config.seed}-" \
+    config.model = f"{config.model_name_prefix}-{config.arch}-{config.optim}-s{config.seed}-" \
                    f"L{config.bert_img_layers}-H{config.bert_img_heads}-dp{config.bert_img_hidden_dp}-" \
                    f"b{config.bs}-lr{strf(config.lr)}-wp{config.warmup}" \
                    f"{'' if config.bert_img_spatial is None else f'-{config.bert_img_spatial}'}"
