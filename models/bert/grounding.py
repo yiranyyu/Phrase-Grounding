@@ -39,9 +39,6 @@ class AbstractGrounding(nn.Module):
 class CosineGrounding(AbstractGrounding):
     def __init__(self, cfgT, cfgI, heads=1):
         super(CosineGrounding, self).__init__(cfgT, cfgI, heads)
-        projection = cfgI.hidden_size // 2
-        self.attention_head_size = int(projection // self.num_attention_heads)
-        self.all_head_size = self.num_attention_heads * self.attention_head_size
 
         self.Q = nn.Linear(cfgT.hidden_size, self.all_head_size)
         self.K = nn.Linear(cfgI.hidden_size, self.all_head_size)
@@ -158,6 +155,35 @@ class MLBGrounding(AbstractGrounding):
         fusion = self.fusion(encT, encI)
         logits = self.score(fusion).view(B, n_tok, n_RoI)
         logits = logits + mask.squeeze(1)
+        return logits
+
+
+class CosineCrossModalSupervisionGrounding(nn.Module):
+    def __init__(self, cfgT, cfgI):
+        super(CosineCrossModalSupervisionGrounding, self).__init__()
+
+        self.projection = cfgI.hidden_size // 2
+        self.Q = nn.Linear(cfgT.hidden_size, self.projection)
+        self.K = nn.Linear(cfgI.hidden_size, self.projection)
+
+    def forward(self, encT, encI, mask):
+        """
+        :param encT: (B, n_tok, T_hidden), encoded text feature
+        :param encI: (B, n_RoI, I_hidden) encoded image feature
+        :param mask:
+        :return: logits
+        """
+        Q = self.Q(encT)
+        K = self.K(encI)
+
+        attention = torch.matmul(Q, K.transpose(-1, -2))
+        attention = attention / math.sqrt(self.projection)
+
+        # (B, n_RoI) -> (B, 1, n_RoI)
+        I_supervision = (attention.softmax(dim=1) * attention).sum(dim=1)
+        I_supervision = I_supervision.unsqueeze(1)
+
+        logits = attention + I_supervision + mask.squeeze(1)
         return logits
 
 
