@@ -213,7 +213,7 @@ def prepare_train(cfg):
         ]
         from pytorch_pretrained_bert import BertAdam
 
-        num_opt_steps = len(train_loader.dataset) // cfg.bs[0] * cfg.epochs
+        num_opt_steps = len(train_loader.dataset) // bs0 * cfg.epochs
         optim = BertAdam(
             gparams,
             lr=cfg.lr,
