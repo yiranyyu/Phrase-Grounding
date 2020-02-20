@@ -241,7 +241,7 @@ def prepare_test(cfg):
     return test_loader, model, device
 
 
-def train(cfg, logging, vis=None):
+def train(cfg, vis=None):
     dataloaders, model, optim, device = prepare_train(cfg)
     trainer = create_supervised_trainer(
         model,
@@ -445,7 +445,7 @@ def run(cfg):
     if cfg.cmd == "train":
         # vis = vis_init(env=f"{cfg.cmd}-{cfg.model}")
         vis = None
-        train(cfg, logging, vis)
+        train(cfg, vis)
     elif cfg.cmd == "test":
         logging.info('test')
         test(cfg)

@@ -36,6 +36,7 @@ class ArgumentParser(argparse.ArgumentParser):
         # App/Logging
         self.add_argument('-L', '--logging', action='store_true', help='Enable logging')
         self.add_argument('--logfile', default=None, help='Path to log messages if provided')
+        self.add_argument('--log_std', action='store_true', help='Print log to stdout')
 
         # CUDA
         self.add_argument('-s', '--seed', default='1204', type=int, help='Random seed')

@@ -19,11 +19,11 @@ def init_cuda(cfg):
 
 def init(cfg):
     init_cuda(cfg)
-    if cfg.logfile:
-        logging.info(f"Logging to {cfg.logfile}")
-        logging.basicConfig(filename=cfg.logfile)
-    else:
-        logging.basicConfig(stream=sys.stdout)
+    logging.info(f"Logging to {cfg.logfile}")
+    handlers = [logging.FileHandler(cfg.logfile)]
+    if cfg.log_std:
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(handlers=handlers)
 
 
 def execute(main, cfg, *args, **kwargs):

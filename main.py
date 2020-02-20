@@ -58,7 +58,7 @@ def parse_args(argv=None):
     parser.add_argument("--warmup", default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup e.g., 0.1 = 10%% of "
                              "training.", )
-    parser.add_argument('--model_name_prefix', help='Name prefix of model to be stored')
+    parser.add_argument('--model_name_prefix', required=True, help='Name prefix of model to be stored')
 
     # Optimizer specific
     parser.add_argument("--optim", type=str, default="adam",
@@ -102,13 +102,16 @@ def setup(config):
 
     config.root = Path(__file__).resolve().parent
     config.data = config.root / config.data
-    config.model = f"{config.model_name_prefix}-{config.arch}-{config.optim}-s{config.seed}-" \
+    config.model = f"{config.model_name_prefix}-s{config.seed}-{config.arch}-{config.optim}-" \
                    f"L{config.bert_img_layers}-H{config.bert_img_heads}-dp{config.bert_img_hidden_dp}-" \
                    f"b{config.bs}-lr{strf(config.lr)}-wp{config.warmup}" \
                    f"{'' if config.bert_img_spatial is None else f'-{config.bert_img_spatial}'}"
     config.export = config.root / "export"
     config.save = config.export / config.model
     config.save.mkdir(parents=True, exist_ok=True)
+
+    if config.logfile is None:
+        config.logfile = config.save / f'{config.model_name_prefix}.log'
 
     SPLITS = ['train', 'val', 'test']
     config.split = config.split.split(',')
@@ -128,12 +131,9 @@ def setup(config):
 
 
 def main(config):
-    # TODO: might have path bug
     runner.run(config)
 
 
 if __name__ == "__main__":
     raw_config = parse_args()
-    logging.info(f'raw_config={raw_config}')
-    # noinspection PyTypeChecker
     run(main, setup(raw_config))
