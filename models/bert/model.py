@@ -12,7 +12,7 @@ from pytorch_pretrained_bert.modeling import (
 from torch.nn import functional as F
 
 from models.nlp import bert
-from models.bert.modal_fusion import *
+from models.bert.grounding import *
 
 
 def select(logits, target):
@@ -219,7 +219,11 @@ class BertForGrounding(nn.Module):
         bert.setup(base=True, uncased=True)
         self.tBert = BertModel.from_pretrained(bert.pretrained())
         self.iBert = IBertModel(cfgI)
-        self.grounding = ModalFusionConcatenateGrounding(self.tBert.config, self.iBert.config)
+        self.grounding = FusionFusionGrounding(
+            self.tBert.config,
+            self.iBert.config,
+            attention_fusion=CosineGrounding,
+            classification_fusion=CosineGrounding)
 
     def forward(self, batch):
         features, spatials, mask, token_ids, token_segs, token_mask = batch
