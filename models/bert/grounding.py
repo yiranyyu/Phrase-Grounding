@@ -67,9 +67,11 @@ class LinearSumGrounding(AbstractGrounding):
         super(LinearSumGrounding, self).__init__(cfgT, cfgI)
 
         self.Q_mlp = nn.Sequential(
-            nn.Linear(cfgT.hidden_size, self.projection))
+            nn.Linear(cfgT.hidden_size, self.projection),
+            nn.ReLU())
         self.K_mlp = nn.Sequential(
-            nn.Linear(cfgI.hidden_size, self.projection))
+            nn.Linear(cfgI.hidden_size, self.projection),
+            nn.ReLU())
         self.mlp = nn.Sequential(
             nn.Linear(self.projection, 1))
 
@@ -100,9 +102,7 @@ class LinearConcatenateGrounding(AbstractGrounding):
             nn.Linear(cfgI.hidden_size, self.projection),
             nn.ReLU())
         self.mlp = nn.Sequential(
-            nn.Linear(self.projection * 2, self.projection),
-            nn.ReLU(),
-            nn.Linear(self.projection, 1))
+            nn.Linear(self.projection * 2, 1))
 
     def forward(self, encT: torch.Tensor, encI: torch.Tensor, mask: torch.Tensor):
         B, n_RoI, I_hidden = encI.shape
@@ -158,9 +158,9 @@ class MLBGrounding(AbstractGrounding):
         return logits
 
 
-class CosineCrossModalSupervisionGrounding(nn.Module):
+class CosineCrossModalSupervisionGrounding(AbstractGrounding):
     def __init__(self, cfgT, cfgI):
-        super(CosineCrossModalSupervisionGrounding, self).__init__()
+        super(CosineCrossModalSupervisionGrounding, self).__init__(cfgT, cfgI)
 
         self.projection = cfgI.hidden_size // 2
         self.Q = nn.Linear(cfgT.hidden_size, self.projection)
@@ -184,6 +184,29 @@ class CosineCrossModalSupervisionGrounding(nn.Module):
         I_supervision = I_supervision.unsqueeze(1)
 
         logits = attention + I_supervision + mask.squeeze(1)
+        return logits
+
+
+class LSTMGrounding(AbstractGrounding):
+    def __init__(self, cfgT, cfgI, nlayers=1):
+        super(LSTMGrounding, self).__init__(cfgT, cfgI)
+
+        hidden_size = 256
+        input_size = self.imag_hidden_size + self.text_hidden_size
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers=nlayers, bias=True,
+                            batch_first=True, dropout=0, bidirectional=True)
+        self.score = nn.Linear(hidden_size * 2, 1)
+
+    def forward(self, encT, encI, mask):
+        B, n_RoI, I_hidden = encI.shape
+        _, n_tok, T_hidden = encT.shape
+
+        encT, encI = broadcast_to_match(encT, encI, n_tok, n_RoI, B, T_hidden)
+        fusion = torch.cat([encI, encT], dim=2)
+
+        # (B, n_tok x n_RoI, H_t + H_i) -> (B, n_tok x n_RoI)
+        logits = self.score(self.lstm(fusion)[0]).squeeze()
+        logits = logits.view(B, n_tok, n_RoI) + mask.squeeze(1)
         return logits
 
 

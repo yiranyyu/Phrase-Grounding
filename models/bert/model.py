@@ -219,9 +219,11 @@ class BertForGrounding(nn.Module):
         bert.setup(base=True, uncased=True)
         self.tBert = BertModel.from_pretrained(bert.pretrained())
         self.iBert = IBertModel(cfgI)
-        self.grounding = CosineCrossModalSupervisionGrounding(
+        self.grounding = FusionFusionGrounding(
             self.tBert.config,
-            self.iBert.config)
+            self.iBert.config,
+            attention_fusion=CosineGrounding,
+            classification_fusion=LinearConcatenateGrounding)
 
     def forward(self, batch):
         features, spatials, mask, token_ids, token_segs, token_mask = batch
