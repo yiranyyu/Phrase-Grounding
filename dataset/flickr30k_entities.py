@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 import util.logging as logging
-from util import iou
+from util.utils import normalize_bboxes, detectGT
 
 logger = logging.getLogger(__name__)
 csv.field_size_limit(sys.maxsize)
@@ -78,30 +78,8 @@ def extract_flickr30k(split: str, img_feature_files: List[str], path: Path):
                 ).reshape((img_RoIs['num_boxes'], 4))
 
                 # bbox: x1, y1, x2, y2
-                x1, y1 = bboxes[:, 0], bboxes[:, 1]
-                x2, y2 = bboxes[:, 2], bboxes[:, 3]
-                box_w = x2 - x1
-                box_h = y2 - y1
-                scaled_x = x1 / image_w
-                scaled_y = y1 / image_h
-                scaled_w = box_w / image_w
-                scaled_h = box_h / image_h
-
-                scaled_w = scaled_w[..., np.newaxis]
-                scaled_h = scaled_h[..., np.newaxis]
-                scaled_x = scaled_x[..., np.newaxis]
-                scaled_y = scaled_y[..., np.newaxis]
-                spatial_features = np.concatenate(
-                    (
-                        scaled_x,
-                        scaled_y,
-                        scaled_x + scaled_w,
-                        scaled_y + scaled_h,
-                        scaled_w,
-                        scaled_h,
-                    ),
-                    axis=1,
-                )
+                # spatial_feature: scaled(x1, y1, x2, y2, w, h)
+                spatial_features = normalize_bboxes(bboxes, image_w, image_h)
 
                 if image_id in image_ids:
                     image_ids.remove(image_id)
@@ -130,22 +108,6 @@ def extract_flickr30k(split: str, img_feature_files: List[str], path: Path):
     data_file.close()
     logger.info(f'Saved {split} features to {data_files[split]}')
     return data_file
-
-
-def detectGT(GT_bboxes, RoIs):
-    """Find matched ROI indices By IoU >= 0.5.
-    Args:
-        GT_bboxes: entity GT bboxes
-        RoIs: all detected ROI bboxes
-    """
-
-    indices = set()
-    for GT_bbox in GT_bboxes:
-        for i, detected_RoI in enumerate(RoIs):
-            if iou(GT_bbox, detected_RoI) >= 0.5:
-                indices.add(i)
-
-    return sorted(indices)
 
 
 def _load_flickr30k(split: str,

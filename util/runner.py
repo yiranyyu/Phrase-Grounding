@@ -8,6 +8,7 @@ from ignite.utils import convert_tensor
 from torch.utils.data import DataLoader
 
 from dataset.flickr30k_entities import Flickr30kEntities
+from dataset.referit import ReferItGame
 from models import bert
 from util import logging
 from util.utils import set_random_seed
@@ -50,7 +51,7 @@ class EntityRecall(Metric):
     """Compute top K entity recalls per batch and epoch.
     """
 
-    def __init__(self, topk=[1, 5, 10], typeN=len(Flickr30kEntities.ETypes), output_transform=lambda x: x):
+    def __init__(self, topk, typeN, output_transform=lambda x: x):
         self.topk = topk if isinstance(topk, list) else [topk]
         self.typeN = typeN
         super(EntityRecall, self).__init__(output_transform)
@@ -152,6 +153,10 @@ def gen_dataloader(cfg, split, bs, shuffle=False):
             max_entities=cfg.max_entities,
             max_rois=cfg.max_rois,
         )
+    elif cfg.dataset == 'referItGame':
+        ds = ReferItGame(
+            split,
+            data_dir=cfg.data / 'referit/refclef')
     else:
         raise ValueError(f"Unsupported dataset: {cfg.dataset}")
 
@@ -189,7 +194,7 @@ def prepare_train(cfg):
     """
 
     # Dataset and DataLoader
-    bs0, bs1 = cfg.bs[0] // cfg.grad_acc_steps, cfg.bs[1]
+    bs0, bs1 = cfg.bs[0] // cfg.grad_acc_steps, cfg.bs[1] // cfg.grad_acc_steps
     train_loader = gen_dataloader(cfg, cfg.split[0], bs=bs0, shuffle=True)
     dev_loader = gen_dataloader(cfg, cfg.split[1], bs=bs1, shuffle=False)
     logging.info(
@@ -256,9 +261,12 @@ def train(cfg, vis=None):
     )
 
     topk = [1, 5, 10]
+    types = {'flickr30k_entities': Flickr30kEntities.ETypes,
+             'referItGame': ReferItGame.ETypes}[cfg.dataset]
+    typeN = len(types)
     metrics = {
         "bce": BCELoss(loss_fn=bert.BCE_with_logits),
-        "recall": EntityRecall(topk=topk),
+        "recall": EntityRecall(topk=topk, typeN=typeN),
     }
     for name, metric in metrics.items():
         metric.attach(trainer, name)
@@ -290,8 +298,8 @@ def train(cfg, vis=None):
             "Training Type Recall",
             "#Iterations",
             "Recall",
-            legend=Flickr30kEntities.ETypes,
-            npts=len(Flickr30kEntities.ETypes),
+            legend=types,
+            npts=typeN,
         )
         val_loss_win = vis_create(vis, "Validation Loss", "#Epochs", "Loss")
         val_recall_win = vis_create(
@@ -307,8 +315,8 @@ def train(cfg, vis=None):
             "Validation Type Recall",
             "#Iterations",
             "Recall",
-            legend=Flickr30kEntities.ETypes,
-            npts=len(Flickr30kEntities.ETypes),
+            legend=types,
+            npts=typeN,
         )
 
     trainer.add_event_handler(Events.ITERATION_COMPLETED, TerminateOnNan())
@@ -330,7 +338,7 @@ def train(cfg, vis=None):
             throughput = 1 / batchTimer.value()
             logging.info(
                 f"[{epoch}/{cfg.epochs}][{iteration_e}/{batches}] "
-                f"training loss={loss:.4f}, recalls={recalls}, per type={typeRecalls}, throughput={throughput:.2f} it/s"
+                f"training loss={loss:.4f}, recalls={recalls}, throughput={throughput:.2f} it/s"
             )
             if vis is not None:
                 vis.line(
@@ -391,10 +399,11 @@ def train(cfg, vis=None):
         score_function=lambda engine: engine.state.metrics["recall"][0][0],
         score_name="recall",
         n_saved=cfg.nsaved,
+        require_empty=False
     )
     stopper = EarlyStopping(
         trainer=trainer,
-        patience=10,
+        patience=3,
         score_function=lambda engine: engine.state.metrics["recall"][0][0],
     )
     evaluator.add_event_handler(
@@ -410,9 +419,12 @@ def test(cfg):
     dataloader, model, device = prepare_test(cfg)
 
     topk = [1, 5, 10]
+    types = {'flickr30k_entities': Flickr30kEntities.ETypes,
+             'referItGame': ReferItGame.ETypes}[cfg.dataset]
+    typeN = len(types)
     metrics = {
         "bce": BCELoss(loss_fn=bert.BCE_with_logits),
-        "recall": EntityRecall(topk=topk),
+        "recall": EntityRecall(topk=topk, typeN=typeN),
     }
     evaluator = create_supervised_evaluator(
         model,
