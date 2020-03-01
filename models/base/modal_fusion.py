@@ -1,6 +1,8 @@
 import torch
+import math
 import torch.nn as nn
 import torch.nn.functional as F
+from pytorch_pretrained_bert.modeling import gelu
 
 
 class MLBFusion(nn.Module):
@@ -8,8 +10,8 @@ class MLBFusion(nn.Module):
                  T_input_hidden,
                  I_input_hidden,
                  mm_hidden_size=1200,
-                 T_activate_func=torch.tanh,
-                 I_activate_func=torch.tanh,
+                 T_activate_func=gelu,
+                 I_activate_func=gelu,
                  dropout_T=0.5,
                  dropout_I=0.5):
         """
@@ -61,11 +63,11 @@ class MutanFusion(nn.Module):
                  mm_hidden_size=510,
                  T_core_hidden=310,
                  I_core_hidden=310,
-                 T_activate_func=torch.tanh,
-                 I_activate_func=torch.tanh,
-                 T_core_activate=torch.tanh,
-                 I_core_activate=torch.tanh,
-                 mm_activate=F.tanh,
+                 T_activate_func=gelu,
+                 I_activate_func=gelu,
+                 T_core_activate=gelu,
+                 I_core_activate=gelu,
+                 mm_activate=gelu,
                  dropout_T=0.5,
                  dropout_I=0.5,
                  dropout_core_T=0,
