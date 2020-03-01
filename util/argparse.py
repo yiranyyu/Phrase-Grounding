@@ -34,7 +34,6 @@ class ArgumentParser(argparse.ArgumentParser):
         self.add_argument("--cfg", action=ConfigAction, help="path to a configuration file in JSON")
 
         # App/Logging
-        self.add_argument('-L', '--logging', action='store_true', help='Enable logging')
         self.add_argument('--logfile', default=None, help='Path to log messages if provided')
         self.add_argument('--log_std', action='store_true', help='Print log to stdout')
 
