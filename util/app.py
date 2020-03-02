@@ -1,5 +1,4 @@
 import os
-import sys
 
 from util import logging
 from util.utils import cuda_device_count
@@ -26,11 +25,6 @@ def init(cfg):
     logging.basicConfig(handlers=handlers)
 
 
-def execute(main, cfg, *args, **kwargs):
+def run(main, cfg, *args, **kwargs):
     init(cfg)
     main(cfg, *args, **kwargs)
-
-
-def run(main, cfg, *args, **kwargs):
-    # Local worker with cfg.gpu
-    execute(main, cfg, *args, **kwargs)

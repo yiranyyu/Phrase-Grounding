@@ -1,4 +1,3 @@
-import numpy as np
 import torch as th
 from ignite.engine import Engine, Events, create_supervised_trainer, create_supervised_evaluator
 from ignite.exceptions import NotComputableError
@@ -12,16 +11,13 @@ from dataset.referit import ReferItGame
 from models import bert
 from util import logging
 from util.utils import set_random_seed
-from util.visdom import vis_create
 
 
 class BCELoss(Metric):
-    """Compute mean entity BCE loss per batch and epoch.
-    """
-
     def __init__(self, loss_fn, output_transform=lambda x: x):
         super(BCELoss, self).__init__(output_transform=output_transform)
         self._loss_fn = loss_fn
+        self._sum = self._num_examples = 0
 
     def reset(self):
         self._sum = 0
@@ -56,10 +52,14 @@ class EntityRecall(Metric):
         self.typeN = typeN
         super(EntityRecall, self).__init__(output_transform)
 
+        self._N = 0.0
+        self._TPs = th.tensor([0.0] * (len(self.topk) + 1))
+        self._typeTPs = th.zeros(self.typeN)
+        self._typeN = th.zeros(self.typeN)
+
     def reset(self):
         self._N = 0.0
         self._TPs = th.tensor([0.0] * (len(self.topk) + 1))
-        # self._bound = 0.0
         self._typeTPs = th.zeros(self.typeN)
         self._typeN = th.zeros(self.typeN)
 
@@ -246,7 +246,7 @@ def prepare_test(cfg):
     return test_loader, model, device
 
 
-def train(cfg, vis=None):
+def train(cfg):
     dataloaders, model, optim, device = prepare_train(cfg)
     trainer = create_supervised_trainer(
         model,
@@ -283,42 +283,6 @@ def train(cfg, vis=None):
     epochTimer = Timer(average=True)
     epochTimer.attach(evaluator)
 
-    if vis is not None:
-        train_loss_win = vis_create(vis, "Training Loss", "#Iterations", "Loss")
-        train_recall_win = vis_create(
-            vis,
-            "Training Recall",
-            "#Iterations",
-            "Recall",
-            legend=[f"R@{k}" for k in topk] + ["bound"],
-            npts=len(topk) + 1,
-        )
-        train_type_recall_win = vis_create(
-            vis,
-            "Training Type Recall",
-            "#Iterations",
-            "Recall",
-            legend=types,
-            npts=typeN,
-        )
-        val_loss_win = vis_create(vis, "Validation Loss", "#Epochs", "Loss")
-        val_recall_win = vis_create(
-            vis,
-            "Validation Recall",
-            "#Epochs",
-            "Recall",
-            legend=[f"R@{k}" for k in topk] + ["bound"],
-            npts=len(topk) + 1,
-        )
-        val_type_recall_win = vis_create(
-            vis,
-            "Validation Type Recall",
-            "#Iterations",
-            "Recall",
-            legend=types,
-            npts=typeN,
-        )
-
     trainer.add_event_handler(Events.ITERATION_COMPLETED, TerminateOnNan())
 
     @trainer.on(Events.ITERATION_COMPLETED)
@@ -334,64 +298,25 @@ def train(cfg, vis=None):
             loss = metrics["bce"].compute()
             recall, typeRecall = metrics["recall"].compute()
             recalls = tuple(round(100 * v, 2) for v in recall)
-            typeRecalls = tuple(round(100 * v, 2) for v in typeRecall)
             throughput = 1 / batchTimer.value()
             logging.info(
                 f"[{epoch}/{cfg.epochs}][{iteration_e}/{batches}] "
                 f"training loss={loss:.4f}, recalls={recalls}, throughput={throughput:.2f} it/s"
             )
-            if vis is not None:
-                vis.line(
-                    X=[iteration],
-                    Y=np.array([loss]),
-                    win=train_loss_win,
-                    update="append",
-                )
-                vis.line(
-                    X=np.array([iteration]),
-                    Y=np.array([recalls]),
-                    win=train_recall_win,
-                    update="append",
-                )
-                vis.line(
-                    X=np.array([iteration]),
-                    Y=np.array([typeRecalls]),
-                    win=train_type_recall_win,
-                    update="append",
-                )
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def trainer_epoch_completed(engine):
         epoch = engine.state.epoch
         evaluator.run(dataloaders[1], 1)
-        metrics = evaluator.state.metrics
-        loss = metrics["bce"]
-        recall, typeRecall = metrics["recall"]
+        train_metrics = evaluator.state.metrics
+        loss = train_metrics["bce"]
+        recall, typeRecall = train_metrics["recall"]
         recalls = tuple(round(100 * v, 2) for v in recall)
         typeRecalls = tuple(round(100 * v, 2) for v in typeRecall)
         logging.info(
             f"[{epoch}/{cfg.epochs}] "
             f"validation loss={loss:.4f}, recalls={recalls}, per type={typeRecalls}, time={epochTimer.value():.3f}s"
         )
-        if vis is not None:
-            vis.line(
-                X=np.array([epoch]),
-                Y=np.array([loss]),
-                win=val_loss_win,
-                update="append",
-            )
-            vis.line(
-                X=np.array([epoch]),
-                Y=np.array([recalls]),
-                win=val_recall_win,
-                update="append",
-            )
-            vis.line(
-                X=np.array([epoch]),
-                Y=np.array([typeRecalls]),
-                win=val_type_recall_win,
-                update="append",
-            )
 
     checkpointer = ModelCheckpoint(
         cfg.save,
@@ -455,9 +380,7 @@ def run(cfg):
     set_random_seed(cfg.seed, deterministic=True)
 
     if cfg.cmd == "train":
-        # vis = vis_init(env=f"{cfg.cmd}-{cfg.model}")
-        vis = None
-        train(cfg, vis)
+        train(cfg)
     elif cfg.cmd == "test":
         logging.info('test')
         test(cfg)

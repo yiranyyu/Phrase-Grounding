@@ -1,5 +1,4 @@
 import torch
-import math
 import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_pretrained_bert.modeling import gelu

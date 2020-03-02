@@ -157,11 +157,6 @@ class SpatialEmbedding(nn.Module):
 
 
 class IBertEmbeddings(nn.Module):
-    """
-    TODO:
-        Sence embedding with spatial cfg: (0, 0, 1, 1, 1, 1)
-    """
-
     def __init__(self, config, din=6):
         super(IBertEmbeddings, self).__init__()
         self.spatial_embedding = SpatialEmbedding(
@@ -219,11 +214,9 @@ class BertForGrounding(nn.Module):
         bert.setup(base=True, uncased=True)
         self.tBert = BertModel.from_pretrained(bert.pretrained())
         self.iBert = IBertModel(cfgI)
-        self.grounding = FusionFusionGrounding(
+        self.grounding = MutanGrounding(
             self.tBert.config,
-            self.iBert.config,
-            attention_fusion=CosineGrounding,
-            classification_fusion=LinearConcatenateGrounding)
+            self.iBert.config)
 
     def forward(self, batch):
         features, spatials, mask, token_ids, token_segs, token_mask = batch
