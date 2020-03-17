@@ -38,7 +38,6 @@ import torch
 from typing import Dict, Any
 from pathlib import Path
 
-sys.path.append('/home/yty/workspace/ACM2020')
 from torch.utils.data import Dataset
 from typing import List
 from tqdm import tqdm

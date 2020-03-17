@@ -1,9 +1,11 @@
+import pickle
 from typing import Dict, Any, Tuple, Callable, Union
 
 import torch
 import math
 import torch.nn as nn
 from models.base.modal_fusion import MLBFusion, MutanFusion
+from models.NMTree.tree import SingleScore, UpTreeLSTM, DownTreeLSTM, PairScore, build_bitree
 from util import logging
 
 
@@ -62,16 +64,190 @@ class CosineGrounding(AbstractGrounding):
         # return scores
 
 
+class NMTGrounding(AbstractGrounding):
+    def __init__(self, cfgT, cfgI, heads=1):
+        super(NMTGrounding, self).__init__(cfgT, cfgI, heads)
+
+        self.Q = nn.Linear(cfgT.hidden_size, 300)
+        self.K = nn.Linear(cfgI.hidden_size, self.all_head_size)
+
+        cache1 = 'data/flickr30k_entities/test_entities_tree1.pt'
+        info = torch.load(cache1)
+        self.word_vocab_size = len(info['word_to_ix'])
+        self.tag_vocab_size = len(info['tag_to_ix'])
+        self.dep_vocab_size = len(info['dep_to_ix'])
+        self.rnn_size = 1024
+        self.vis_dim = 2048 + 512 + 512
+        self.embed_size = 300 + 50 + 50
+
+        self.word_embedding = nn.Embedding(num_embeddings=self.word_vocab_size,
+                                           embedding_dim=300)
+        self.tag_embedding = nn.Embedding(num_embeddings=self.tag_vocab_size,
+                                          embedding_dim=50)
+        self.dep_embedding = nn.Embedding(num_embeddings=self.dep_vocab_size,
+                                          embedding_dim=50)
+
+        self.word_vocab = info['word_to_ix']
+        self.tag_vocab = info['tag_to_ix']
+        self.dep_vocab = info['dep_to_ix']
+
+        self.dropout = nn.Dropout(0.5)
+
+        self.single_score = SingleScore(self.vis_dim, self.embed_size)
+        self.pair_score = PairScore(self.vis_dim, self.embed_size)
+
+        self.up_tree_lstm = UpTreeLSTM(self.embed_size, self.rnn_size)
+        self.down_tree_lstm = DownTreeLSTM(self.embed_size, self.rnn_size)
+
+        self.sbj_attn_logit = nn.Linear(self.rnn_size * 2, 1)
+        self.rlt_attn_logit = nn.Linear(self.rnn_size * 2, 1)
+        self.obj_attn_logit = nn.Linear(self.rnn_size * 2, 1)
+
+    def traversal(self, node, v, embedding):
+        node.logit = self.node_to_logit(node)
+        for idx in range(node.num_children):
+            self.traversal(node.children[idx], v, embedding)
+
+        # Case 1: Leaf, update node.sub_word and node.score
+        if node.num_children == 0:
+            node.sub_word = [node.idx]
+            node.sub_logit = [node.logit]
+            sbj_embedding = self.attn_embedding(node.sub_word, node.sub_logit, embedding, 'sbj')
+            sbj_score = self.single_score(v, sbj_embedding)
+            node.score = sbj_score
+        # Case 2: Not leaf
+        else:
+            sub_word = [node.idx]
+            sub_logit = [node.logit]
+            for c in node.children:
+                sub_word = sub_word + c.sub_word
+                sub_logit = sub_logit + c.sub_logit
+
+            # Case 2.1: Not leaf, Language Node
+            sbj_score = self.zero_score
+            for c in node.children:
+                sbj_score = sbj_score + c.score
+
+            # Case 2.2: Not leaf, Visual Node
+            obj_embedding = self.attn_embedding(sub_word, sub_logit, embedding, 'obj')
+            obj_score = self.single_score(v, obj_embedding)
+            for c in node.children:
+                obj_score = obj_score + c.score
+            node.obj_score = obj_score
+            rlt_embedding = self.attn_embedding(sub_word, sub_logit, embedding, 'rlt')
+            rlt_score = self.pair_score(v, obj_score, rlt_embedding)
+
+            # Gumbel softmax, [lang, vis]
+            node.sub_word = sub_word
+            node.sub_logit = sub_logit
+            node.score = torch.mm(node.type, torch.stack([sbj_score, rlt_score], dim=0)).squeeze(0)
+
+        return
+
+    def list_to_embedding(self, sent):
+        """
+        translate a sentence into embedding
+        Input: list of sentence, contains tokens, tags, deps
+        Output: embedding (num_words * embedding_size)
+        """
+        word_ids = []
+        for word in sent['tokens']:
+            word_id = self.word_vocab[word] if word in self.word_vocab else self.word_vocab['UNK']
+            word_ids.append(word_id)
+
+        tag_ids = []
+        for tag in sent['tags']:
+            tag_id = self.tag_vocab[tag] if tag in self.tag_vocab else self.tag_vocab['UNK']
+            tag_ids.append(tag_id)
+
+        dep_ids = []
+        for dep in sent['deps']:
+            dep_id = self.dep_vocab[dep] if dep in self.dep_vocab else self.dep_vocab['UNK']
+            dep_ids.append(dep_id)
+
+        word_ids = torch.tensor(word_ids).cuda()
+        w_embed = self.word_embedding(word_ids)
+        tag_ids = torch.tensor(tag_ids).cuda()
+        t_embed = self.tag_embedding(tag_ids)
+        dep_ids = torch.tensor(dep_ids).cuda()
+        d_embed = self.dep_embedding(dep_ids)
+
+        embedding = torch.cat([w_embed, t_embed, d_embed], dim=-1)
+        return self.dropout(embedding)
+
+    def attn_embedding(self, word_list, logit_list, embedding, logit_type):
+        embed = embedding[word_list]
+        logits = torch.stack([s[logit_type] for s in logit_list], dim=0)
+
+        attn = torch.softmax(logits, dim=0)
+        attn_embed = torch.mm(attn.unsqueeze(0), embed)
+
+        return attn_embed
+
+    def node_to_logit(self, node):
+        hidden = torch.cat([node.up_state[1], node.down_state[1]], dim=-1)
+        sbj_logit = self.sbj_attn_logit(hidden).squeeze()
+        rlt_logit = self.rlt_attn_logit(hidden).squeeze()
+        obj_logit = self.obj_attn_logit(hidden).squeeze()
+
+        logit = {'sbj': sbj_logit, 'rlt': rlt_logit, 'obj': obj_logit}
+
+        return logit
+
+    def transpose(self, x):
+        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        x = x.view(*new_x_shape)  # B x #tokens x #heads x head_size
+        return x.permute(0, 2, 1, 3)  # B x #heads x # tokens x head_size
+
+    @staticmethod
+    def remapping_word_feature(encT, word2piece_mapping):
+        # TODO: map bert-tokenized token seq to spacy DPT token seq, merge features of word-pieces in same word
+        return encT
+
+    def forward(self, encT, encI, mask, tree_data_batch, word2piece_mapping):
+        B, n_RoI, I_hidden = encI.shape
+        _, n_tok, T_hidden = encT.shape
+
+        Q = self.Q(encT)
+        K = self.K(encI)
+        Q = self.remapping_word_feature(Q, word2piece_mapping)
+
+        tree_dict_batch = pickle.loads(tree_data_batch[0])
+        logits = Q.new_zeros((B, n_tok, n_RoI))
+
+        # TODO: process every (caption, img) pair chronologically
+        for item_idx, tree_dict in enumerate(tree_dict_batch):
+            tree = build_bitree(tree_dict)
+            self.up_tree_lstm(tree, Q[item_idx])
+            self.down_tree_lstm(tree, Q[item_idx])
+            self.traversal(tree, K, Q[item_idx])
+
+            # TODO: collect matching score of every word from tree
+
+            # TODO: map logits of words to logits of word-pieces
+            logits[item_idx] = ...
+
+        logits = logits / math.sqrt(self.attention_head_size)
+        logits = logits + mask
+        return logits.squeeze()
+
+
 class LinearSumGrounding(AbstractGrounding):
     def __init__(self, cfgT, cfgI):
         super(LinearSumGrounding, self).__init__(cfgT, cfgI)
 
         self.Q_mlp = nn.Sequential(
             nn.Linear(cfgT.hidden_size, self.projection),
-            nn.ReLU())
+            nn.GELU(),
+            # nn.Linear(self.projection, self.projection),
+            # nn.Dropout()
+        )
         self.K_mlp = nn.Sequential(
             nn.Linear(cfgI.hidden_size, self.projection),
-            nn.ReLU())
+            nn.GELU(),
+            # nn.Linear(self.projection, self.projection),
+            # nn.Dropout()
+        )
         self.mlp = nn.Sequential(
             nn.Linear(self.projection, 1))
 
@@ -97,12 +273,23 @@ class LinearConcatenateGrounding(AbstractGrounding):
 
         self.Q_mlp = nn.Sequential(
             nn.Linear(cfgT.hidden_size, self.projection),
-            nn.ReLU())
+            # nn.ReLU(),
+            # nn.GELU(),
+            # nn.Linear(self.projection, self.projection),
+            # nn.Dropout()
+        )
         self.K_mlp = nn.Sequential(
             nn.Linear(cfgI.hidden_size, self.projection),
-            nn.ReLU())
+            # nn.ReLU(),
+            # nn.GELU(),
+            # nn.Linear(self.projection, self.projection),
+            # nn.Dropout()
+        )
         self.mlp = nn.Sequential(
-            nn.Linear(self.projection * 2, 1))
+            nn.Linear(self.projection * 2, self.projection),
+            nn.ReLU(),
+            # nn.GELU(),
+            nn.Linear(self.projection, 1))
 
     def forward(self, encT: torch.Tensor, encI: torch.Tensor, mask: torch.Tensor):
         B, n_RoI, I_hidden = encI.shape
@@ -158,9 +345,9 @@ class MLBGrounding(AbstractGrounding):
         return logits
 
 
-class CosineCrossModalSupervisionGrounding(AbstractGrounding):
+class CosineCrossModalSupervisionGrounding(nn.Module):
     def __init__(self, cfgT, cfgI):
-        super(CosineCrossModalSupervisionGrounding, self).__init__(cfgT, cfgI)
+        super(CosineCrossModalSupervisionGrounding, self).__init__()
 
         self.projection = cfgI.hidden_size // 2
         self.Q = nn.Linear(cfgT.hidden_size, self.projection)
@@ -187,29 +374,6 @@ class CosineCrossModalSupervisionGrounding(AbstractGrounding):
         return logits
 
 
-class LSTMGrounding(AbstractGrounding):
-    def __init__(self, cfgT, cfgI, nlayers=1):
-        super(LSTMGrounding, self).__init__(cfgT, cfgI)
-
-        hidden_size = 256
-        input_size = self.imag_hidden_size + self.text_hidden_size
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers=nlayers, bias=True,
-                            batch_first=True, dropout=0, bidirectional=True)
-        self.score = nn.Linear(hidden_size * 2, 1)
-
-    def forward(self, encT, encI, mask):
-        B, n_RoI, I_hidden = encI.shape
-        _, n_tok, T_hidden = encT.shape
-
-        encT, encI = broadcast_to_match(encT, encI, n_tok, n_RoI, B, T_hidden)
-        fusion = torch.cat([encI, encT], dim=2)
-
-        # (B, n_tok x n_RoI, H_t + H_i) -> (B, n_tok x n_RoI)
-        logits = self.score(self.lstm(fusion)[0]).squeeze()
-        logits = logits.view(B, n_tok, n_RoI) + mask.squeeze(1)
-        return logits
-
-
 class FusionFusionGrounding(AbstractGrounding):
     # To suppress IDE warning
     att_fusion: Union[Tuple[Callable[[Tuple[Any, ...], Dict[str, Any]], Any]], Callable]
@@ -218,8 +382,8 @@ class FusionFusionGrounding(AbstractGrounding):
     def __init__(self,
                  cfgT,
                  cfgI,
-                 attention_fusion=MutanGrounding,
-                 classification_fusion=MutanGrounding):
+                 attention_fusion=MLBGrounding,
+                 classification_fusion=MLBGrounding):
         super(FusionFusionGrounding, self).__init__(cfgT, cfgI)
 
         self.attention = attention_fusion(cfgT, cfgI)

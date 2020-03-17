@@ -137,3 +137,4 @@ export
 tmp
 data
 .idea
+*.DS_Store

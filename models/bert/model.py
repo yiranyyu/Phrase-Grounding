@@ -209,6 +209,7 @@ class IBertModel(BertPreTrainedModel):
 
 
 class BertForGrounding(nn.Module):
+    # noinspection PyUnresolvedReferences
     def __init__(self, cfgI):
         super(BertForGrounding, self).__init__()
         bert.setup(base=True, uncased=True)
@@ -218,6 +219,7 @@ class BertForGrounding(nn.Module):
             self.tBert.config,
             self.iBert.config)
 
+    # noinspection PyTypeChecker
     def forward(self, batch):
         features, spatials, mask, token_ids, token_segs, token_mask = batch
         encT, _ = self.tBert(token_ids, token_segs, token_mask, output_all_encoded_layers=False)
@@ -232,6 +234,7 @@ class BertForGrounding(nn.Module):
         output = self.grounding(encT, encI, extended_mask)
         return output
 
+    # noinspection PyUnresolvedReferences
     def state_dict(self, destination=None, prefix='', keep_vars=False):
         states = super(BertForGrounding, self).state_dict(destination, prefix, keep_vars)
         states["tBert.config"] = self.tBert.config,

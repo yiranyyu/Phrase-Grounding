@@ -110,6 +110,158 @@ def extract_flickr30k(split: str, img_feature_files: List[str], path: Path):
     return data_file
 
 
+# def _load_flickr30k_tree(split: str,
+#                          path: str,
+#                          imgid2idx: Dict[int, int],
+#                          bbox_offsets: torch.Tensor,
+#                          rois: torch.Tensor):
+#     path = Path(path)
+#     cache = path / f'{split}_entities_tree.pt'
+#     cache1 = path / f'{split}_entities_tree1.pt'
+#     if cache.exists():
+#         logger.info(f'Loading entities from cache at {cache}')
+#         return torch.load(cache)
+#
+#     logger.info(f'Extracting entities from scratch...')
+#     pattern_no = r'\/EN\#(\d+)'
+#     pattern_phrase = r'\[(.*?)\]'
+#     pattern_annotation = r'\[[^ ]+ '
+#
+#     num_grounding = OrderedDict()
+#     num_captions = OrderedDict()
+#     missing_entity_count = defaultdict(int)
+#     multibox_entity_count = 0
+#     img_cap_entries = []
+#
+#     nlp = spacy.load('en_core_web_sm', disable=['ner'])
+#     for imgid, img_idx in tqdm(imgid2idx.items(), desc=f'Loading Flickr30K'):
+#         phrase_file = path / f'Sentences/{imgid}.txt'  # entity coreference chain
+#         anno_file = path / f'Annotations/{imgid}.xml'  # entity detected_RoIs
+#         with open(phrase_file, 'r', encoding='utf-8') as f:
+#             sentences = [line.strip() for line in f]
+#
+#         # Parse Annotation to retrieve GT detected_RoIs for each entity id
+#         #   GT box => one or more entity ids
+#         #   entity id => one or more GT boxes
+#         root = parse(anno_file).getroot()
+#         objects = root.findall('./object')
+#         entity_GT_boxes = defaultdict(list)
+#         for obj in objects:
+#             # Exceptions: too many, scene or non-visual
+#             if obj.find('bndbox') is None or len(obj.find('bndbox')) == 0:
+#                 continue
+#
+#             x1 = int(obj.findtext('./bndbox/xmin'))
+#             y1 = int(obj.findtext('./bndbox/ymin'))
+#             x2 = int(obj.findtext('./bndbox/xmax'))
+#             y2 = int(obj.findtext('./bndbox/ymax'))
+#             assert x1 > 0 and y1 > 0
+#             for name in obj.findall('name'):
+#                 entity_ID = int(name.text)
+#                 assert entity_ID > 0
+#
+#                 if entity_ID in entity_GT_boxes:
+#                     multibox_entity_count += 1
+#                 entity_GT_boxes[entity_ID].append([x1, y1, x2, y2])
+#
+#         # Parse Sentence: caption and phrases w/ grounding
+#         #   entity id => one or more phrases
+#         start, end = bbox_offsets[img_idx]
+#         detected_RoIs = rois[start: end]
+#         num_captions[imgid] = len(sentences)
+#         num_grounding[imgid] = 0
+#
+#         for sent_id, sent in enumerate(sentences):
+#
+#             caption = re.sub(pattern_annotation, '', sent).replace(']', '')
+#             tree_sent = caption.replace(', ', '').replace('.', '')
+#
+#             doc = nlp(tree_sent)
+#             new_sent, new, old_sent, old = doc_prune(doc)
+#             if len(new) == 0:
+#                 print("we must examine the dataset!")
+#                 print(sentences[sent_id])
+#                 raise KeyError
+#             doc = nlp(new_sent)
+#             t, s = doc_to_tree(doc)
+#             s = sorted(s, key=lambda x: x[0])
+#             token = [x[1] for x in s]
+#             tag = [x[3] for x in s]
+#             dep = [x[4] for x in s]
+#             tree = {'tree': t, 'tokens': token,
+#                     'tags': tag, 'deps': dep}
+#
+#             entities = []
+#             for i, entity in enumerate(re.findall(pattern_phrase, sent)):
+#                 info, phrase = entity.split(' ', 1)
+#                 types = info.split('/')[2:]
+#                 entity_ID = int(re.findall(pattern_no, info)[0])
+#
+#                 # grounded RoIs
+#                 if entity_ID not in entity_GT_boxes:
+#                     assert entity_ID >= 0
+#                     for t in types:
+#                         missing_entity_count[t] += 1
+#                     continue
+#
+#                 # find matched ROI indices with entity GT boxes
+#                 matched_RoIs = detectGT(entity_GT_boxes[entity_ID], detected_RoIs)
+#                 entities.append((entity_ID, types, phrase, matched_RoIs))
+#                 if not matched_RoIs:
+#                     logger.warning(f'No object detection of GT: [{imgid}][{i}:{entity_ID}]{phrase}')
+#
+#             if not entities:
+#                 logger.warning(f'[{imgid}] no entity RoIs found: {sent}')
+#                 continue
+#
+#             num_grounding[imgid] += 1
+#             img_cap_entries.append({
+#                 'imgid': imgid,
+#                 'img_idx': img_idx,
+#                 'caption': caption,
+#                 'entities': entities,
+#                 'tree': tree
+#             })
+#
+#     if len(missing_entity_count) > 0:
+#         cap = torch.tensor(list(num_captions.values()))
+#         grounded = torch.tensor(list(num_grounding.values()))
+#         incomplete = (grounded < cap).sum().item()
+#         none = (grounded == 0).sum().item()
+#         if none > 0:
+#             indexes = (grounded == 0).nonzero().view(-1)
+#             imgids = list(num_grounding.keys())
+#             imgids = tuple(imgids[i] for i in indexes)
+#             logger.warning(f"images w/o entity grounding: {imgids}")
+#
+#         logger.warning(
+#             f"{incomplete}/{len(num_grounding)} with incomplete caption num_grounding"
+#             f", {none}/{incomplete} w/o num_grounding"
+#         )
+#         logger.warning(
+#             f"missing_entity_count: {', '.join(f'{k}={v}' for k, v in missing_entity_count.items())}")
+#         logger.warning(f"multibox_entity_count={multibox_entity_count}")
+#
+#     torch.save(img_cap_entries, cache)
+#
+#     trees = []
+#     for entry in img_cap_entries:
+#         trees.append(entry['tree'])
+#     word_vocab = build_vocab(trees, 'tokens', 1)
+#     tag_vocab = build_vocab(trees, 'tags', 1)
+#     dep_vocab = build_vocab(trees, 'deps', 1)
+#     wtoi = {w: i for i, w in enumerate(word_vocab)}
+#     ttoi = {w: i for i, w in enumerate(tag_vocab)}
+#     dtoi = {w: i for i, w in enumerate(dep_vocab)}
+#     info = {
+#         'word_to_ix': wtoi,
+#         'tag_to_ix': ttoi,
+#         'dep_to_ix': dtoi
+#     }
+#     torch.save(info, cache1)
+#     return img_cap_entries, info
+#
+
 def _load_flickr30k(split: str,
                     path: str,
                     imgid2idx: Dict[int, int],
