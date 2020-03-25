@@ -215,7 +215,7 @@ class BertForGrounding(nn.Module):
         bert.setup(base=True, uncased=True)
         self.tBert = BertModel.from_pretrained(bert.pretrained())
         self.iBert = IBertModel(cfgI)
-        self.grounding = MutanGrounding(
+        self.grounding = CosineGrounding(
             self.tBert.config,
             self.iBert.config)
 
@@ -231,7 +231,7 @@ class BertForGrounding(nn.Module):
         extended_mask = (1.0 - extended_mask) * -10000.0
 
         encI, _ = self.iBert(features, spatials, mask, output_all_encoded_layers=False)
-        output = self.grounding(encT, encI, extended_mask)
+        output = self.grounding(encT, encI, extended_mask, spatials)
         return output
 
     # noinspection PyUnresolvedReferences

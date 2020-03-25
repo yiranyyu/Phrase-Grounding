@@ -69,8 +69,15 @@ def tokenize(text, plain=True, max_tokens=None):
     text = text if isinstance(text, list) else [text]
     tokens = [] if plain else ["[CLS]"]
     sents = []
+    piece_to_word = []
+
     for sent in text:
+        cnt = -1
         toks = _TOKENIZER.tokenize(sent)
+        for tok in toks:
+            if not tok.startswith('##'):
+                cnt += 1
+            piece_to_word.append(cnt)
         sents.append(toks)
 
     if max_tokens is not None:
@@ -89,7 +96,7 @@ def tokenize(text, plain=True, max_tokens=None):
         if not plain:
             tokens.append("[SEP]")
 
-    return tokens
+    return tokens, piece_to_word
 
 
 def tensorize(tokens, max_tokens=None, device=torch.device("cpu")):

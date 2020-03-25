@@ -6,6 +6,7 @@ import math
 import torch.nn as nn
 from models.base.modal_fusion import MLBFusion, MutanFusion
 from models.NMTree.tree import SingleScore, UpTreeLSTM, DownTreeLSTM, PairScore, build_bitree
+from models.base.visual_context_fusion import VisualContextFusion
 from util import logging
 
 
@@ -43,14 +44,17 @@ class CosineGrounding(AbstractGrounding):
         super(CosineGrounding, self).__init__(cfgT, cfgI, heads)
 
         self.Q = nn.Linear(cfgT.hidden_size, self.all_head_size)
-        self.K = nn.Linear(cfgI.hidden_size, self.all_head_size)
+        self.K = nn.Linear(cfgI.hidden_size * 2, self.all_head_size)
+        self.visual_context_fusion = VisualContextFusion(cfgI)
 
     def transpose(self, x):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(*new_x_shape)  # B x #tokens x #heads x head_size
         return x.permute(0, 2, 1, 3)  # B x #heads x # tokens x head_size
 
-    def forward(self, encT, encI, mask):
+    def forward(self, encT, encI, mask, spatials=None):
+        if spatials is not None:
+            encI = self.visual_context_fusion(encI, 1 + (mask[:, 0, 0, :] / 10000), spatials)
         Q = self.Q(encT)
         K = self.K(encI)
         Q = self.transpose(Q)
@@ -60,8 +64,6 @@ class CosineGrounding(AbstractGrounding):
         logits = logits / math.sqrt(self.attention_head_size)
         logits = logits + mask
         return logits.squeeze()
-        # scores = nn.Sigmoid(logits)
-        # return scores
 
 
 class NMTGrounding(AbstractGrounding):
@@ -201,6 +203,9 @@ class NMTGrounding(AbstractGrounding):
 
     @staticmethod
     def remapping_word_feature(encT, word2piece_mapping):
+        # N word-pieces, K words
+        # Bert -> (B, N, hidden)
+        # -> (B, K, hidden)
         # TODO: map bert-tokenized token seq to spacy DPT token seq, merge features of word-pieces in same word
         return encT
 
@@ -392,9 +397,9 @@ class FusionFusionGrounding(AbstractGrounding):
         cfgI.hidden_size = self.text_hidden_size + self.imag_hidden_size
         self.classification = classification_fusion(cfgT, cfgI)
 
-    def forward(self, encT, encI, mask):
+    def forward(self, encT, encI, mask, spatials):
         # (B, n_tok, n_RoI)
-        attention = self.attention(encT, encI, mask)
+        attention = self.attention(encT, encI, mask, None)
         attention_on_T: torch.Tensor = attention.softmax(dim=1)
         attention_on_I: torch.Tensor = attention.softmax(dim=2)
 
@@ -403,6 +408,6 @@ class FusionFusionGrounding(AbstractGrounding):
         fused_T = torch.cat([encT, attented_I], dim=-1)
         fused_I = torch.cat([encI, attented_T], dim=-1)
 
-        logits = self.classification(fused_T, fused_I, mask)
+        logits = self.classification(fused_T, fused_I, mask, spatials)
         logits = logits + attention + mask.squeeze(1)
         return logits

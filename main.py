@@ -73,7 +73,7 @@ def parse_args(argv=None):
     # Misc
     parser.add_argument("--log-interval", type=int, default=8,
                         help="frequency in batch iterations to show training progress", )
-    parser.add_argument("--nsaved", type=int, default=3, help="Number of top performance models to save")
+    parser.add_argument("--nsaved", type=int, default=1, help="Number of top performance models to save")
     parser.add_argument("--resume", type=str, default=None, help="path of saved model to resume")
 
     if argv is None:

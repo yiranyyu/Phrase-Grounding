@@ -46,10 +46,10 @@ import torch.nn.functional as F
 from util.utils import normalize_bboxes, detectGT
 from util import logging
 from models.nlp import bert
+from dataset import FIELD_NAMES, _count_bbox_num
 
 csv.field_size_limit(sys.maxsize)
 bert.setup()
-FIELD_NAMES = ['image_id', 'image_w', 'image_h', 'num_boxes', 'boxes', 'features']
 
 
 # author: 'licheng'  # modified by yirany
@@ -264,18 +264,6 @@ class REFER:
     def getRefBox(self, ref_id):
         ann = self.refToAnn[ref_id]
         return ann['bbox']  # [x, y, w, h]
-
-
-# noinspection PyShadowingNames
-def _count_bbox_num(img_ids: set, file_path: Path):
-    num = 0
-    with file_path.open() as img_feature_file:
-        reader = csv.DictReader(img_feature_file, delimiter='\t', fieldnames=FIELD_NAMES)
-        for img_data in reader:
-            img_id = int(img_data['image_id'])
-            if img_id in img_ids:
-                num += int(img_data['num_boxes'])
-    return num
 
 
 # noinspection PyShadowingNames
@@ -494,7 +482,7 @@ class ReferItGame(Dataset):
         :param entry: img-boxes-sent pair
         """
         sent = entry['sent']
-        tokens = bert.tokenize(sent, plain=False)
+        tokens, piece2word = bert.tokenize(sent, plain=False)
         indices = torch.zeros(1, dtype=torch.long)
         target = torch.zeros(1, self.max_rois)
         category = torch.zeros(1, len(ReferItGame.ETypes))
