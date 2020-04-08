@@ -13,6 +13,7 @@ from torch.nn import functional as F
 
 from models.nlp import bert
 from models.bert.grounding import *
+from models.base.visual_context_fusion import center_dist, IoU_dist
 
 
 def select(logits, target):
@@ -43,7 +44,7 @@ def bce_with_logits(logits, target, reduction='mean'):
     return loss
 
 
-def BCE_with_logits(logits, target):
+def BCE_with_logits(logits, target, mask, token_mask, cap_emb, img_emb):
     """Compute mean entity BCE of a batch.
 
     NOTE: mean instance BCE does not work.
@@ -52,8 +53,134 @@ def BCE_with_logits(logits, target):
         logits (B x max_tokens x max_rois):
         target (B x max_entities x max_rois):
     """
+    # weakly_loss = Align_Loss(cap_emb, img_emb, logits, mask, token_mask)[0]
     logits, target, E, _ = select(logits, target)
-    return bce_with_logits(logits, target, reduction='sum') / E, E
+    bce_loss = bce_with_logits(logits, target, reduction='sum') / E
+
+    loss = bce_loss
+    return loss, E
+
+
+def Align_Loss(cap_emb, img_emb, phrase_RoI_matching_score, mask, token_mask):
+    margin = 0.1
+    gamma = 1.0
+    cap_emb = F.normalize(cap_emb, p=2, dim=-1)
+    img_emb = F.normalize(img_emb, p=2, dim=-1)
+    matching_score = torch.matmul(cap_emb, img_emb.transpose(-1, -2))  # (B, H) x (H, B)
+
+    # L0 = diversity_loss(phrase_RoI_matching_score, mask, token_mask)
+    # L1 = Align_Loss_prob(cap_emb, img_emb, gamma)
+    L3 = Align_Loss_sum(cap_emb, img_emb, margin)
+
+    loss = L3
+
+    # print(f'diversity: {L0: .5f}, ranking: {L3: .5f}, loss: {loss :.5f}')
+    return loss, matching_score
+
+
+def assert_no_nan(tensor, name):
+    assert not torch.any(torch.isnan(tensor)), f'found nan in {name} {tensor}'
+
+
+def diversity_loss(phrase_RoI_matching_score, mask, token_mask):
+    B, _, _ = phrase_RoI_matching_score.shape
+    RoI_num = mask.sum(dim=-1)
+    tok_num = token_mask.sum(dim=-1)
+    epsilon = 1E-8
+
+    loss = torch.tensor(0.).cuda()
+    for i in range(B):
+        score = torch.softmax(phrase_RoI_matching_score[i, :tok_num[i], :RoI_num[i]], dim=-1).clamp(min=epsilon)
+        assert_no_nan(score, 'score.softmax')
+        score = score * score.log()
+        assert_no_nan(score, 'score * score.log')
+        loss += score.sum()
+    loss = -loss
+    loss /= max(1, tok_num.sum())
+    return loss
+
+
+def Align_Loss_prob(cap_emb, img_emb, gamma=10.0):
+    matching_score = torch.matmul(cap_emb, img_emb.transpose(-1, -2))  # (B, H) x (H, B)
+    matching_score *= gamma
+    P_CI = torch.diag(torch.softmax(matching_score, dim=1))
+    P_IC = torch.diag(torch.softmax(matching_score, dim=0))
+    L1 = -torch.mean(torch.log(P_CI))
+    L2 = -torch.mean(torch.log(P_IC))
+    return L1 + L2
+
+
+def Align_Loss_sum(cap_emb, img_emb, margin=0.1):
+    matching_score = torch.matmul(cap_emb, img_emb.transpose(-1, -2))  # (B, H) x (H, B)
+    paired_score = torch.diag(matching_score)
+
+    B, _ = matching_score.shape
+    matching_score[torch.arange(B), torch.arange(B)] = -10
+
+    loss_I_C = torch.sum(torch.relu(matching_score - paired_score.unsqueeze(0).repeat(B, 1) + margin), dim=0)
+    loss_I_C = torch.mean(loss_I_C)
+
+    loss_C_I = torch.sum(torch.relu(matching_score - paired_score.unsqueeze(1).repeat(1, B) + margin), dim=1)
+    loss_C_I = torch.mean(loss_C_I)
+
+    loss = loss_C_I + loss_I_C
+    return loss
+
+
+# Pooling_based_Loss
+def Pooling_based_Loss(encT, encI, token_mask, mask):
+    B, n_tok = token_mask.shape
+    _, n_RoI = mask.shape
+    n = 5
+    margin = 0.1
+
+    # POOLING BASED
+    fragment_score = torch.matmul(F.normalize(encT.view(B * n_tok, -1), p=2, dim=-1),
+                                  F.normalize(encI.view(B * n_RoI, -1), p=2, dim=-1).transpose(-1, -2))
+    fragment_tok_mask = token_mask.view(-1)
+    fragment_RoI_mask = mask.view(-1)
+    fragment_score *= fragment_tok_mask.unsqueeze(1) * fragment_RoI_mask.unsqueeze(0)
+    fragment_score = torch.relu(fragment_score)
+
+    S = fragment_score.new_zeros((B, B))
+    for i in range(B):
+        for j in range(B):
+            row_st = i * n_tok
+            col_st = j + n_RoI
+            S[i, j] = torch.sum(fragment_score[row_st: row_st + n_tok, col_st: col_st + n_RoI])
+
+    num_RoI = mask.sum(dim=1).float()
+    num_pair = torch.matmul(token_mask.sum(dim=1).float().unsqueeze(1) + n, num_RoI.unsqueeze(0) + n)
+    S /= num_pair
+    paired_score = torch.diag(S)
+
+    loss_I_C = torch.sum(torch.relu(S - paired_score.unsqueeze(0).repeat(B, 1) + margin), dim=0)
+    loss_I_C = torch.mean(loss_I_C)
+
+    loss_C_I = torch.sum(torch.relu(S - paired_score.unsqueeze(1).repeat(1, B) + margin), dim=1)
+    loss_C_I = torch.mean(loss_C_I)
+
+    loss = loss_C_I + loss_I_C
+    return loss
+
+    # END POOLING BASED
+
+
+def Align_Loss_real(cap_emb, img_emb, margin=0.1):
+    matching_score = torch.matmul(cap_emb, img_emb.transpose(-1, -2))  # (B, H) x (H, B)
+    paired_score = torch.diag(matching_score)
+
+    B, _ = matching_score.shape
+    matching_score[torch.arange(B), torch.arange(B)] = -10
+
+    loss_I_C = torch.max(torch.relu(matching_score - paired_score.unsqueeze(0).repeat(B, 1) + margin), dim=0)[0]
+    loss_I_C = torch.mean(loss_I_C)
+
+    loss_C_I = torch.max(torch.relu(matching_score - paired_score.unsqueeze(1).repeat(1, B) + margin), dim=1)[0]
+    loss_C_I = torch.mean(loss_C_I)
+
+    loss = loss_C_I + loss_I_C
+    return loss
 
 
 # noinspection PyArgumentList
@@ -217,11 +344,25 @@ class BertForGrounding(nn.Module):
         self.iBert = IBertModel(cfgI)
         self.grounding = CosineGrounding(
             self.tBert.config,
-            self.iBert.config)
+            self.iBert.config,
+            use_neighbor=False,
+            use_global=False,
+            k=1,
+            dist_func=center_dist)
+
+        # self.k = 3
+        # self.hidden = 256
+        # self.Qs = nn.Sequential(nn.Linear(768 * 2, self.hidden),
+        #                         nn.ReLU(),
+        #                         nn.Linear(self.hidden, self.hidden))
+        #
+        # self.deep_set = nn.Sequential(nn.Linear(2048, self.hidden),
+        #                               nn.ReLU(),
+        #                               nn.Linear(self.hidden, self.hidden))
 
     # noinspection PyTypeChecker
     def forward(self, batch):
-        features, spatials, mask, token_ids, token_segs, token_mask = batch
+        features, global_ctx, spatials, mask, token_ids, token_segs, token_mask, phrase_indices = batch
         encT, _ = self.tBert(token_ids, token_segs, token_mask, output_all_encoded_layers=False)
 
         if mask is None:
@@ -231,8 +372,34 @@ class BertForGrounding(nn.Module):
         extended_mask = (1.0 - extended_mask) * -10000.0
 
         encI, _ = self.iBert(features, spatials, mask, output_all_encoded_layers=False)
-        output = self.grounding(encT, encI, extended_mask, spatials)
-        return output
+        matching_score = self.grounding(encT, encI, extended_mask, None, None)
+
+        # B, n_tok, n_RoI = matching_score.shape
+        # topk_idx = matching_score.topk(k=self.k, dim=-1)[1]
+        # lengths = token_mask.sum(dim=1).long()
+        #
+        # # (B, n_tok, n_RoI)
+        # topk_mask = torch.zeros_like(matching_score).scatter(dim=-1, index=topk_idx, value=1)
+        #
+        # # (B, n_tok, 1)
+        # matched_idx = topk_mask.new_zeros((B, n_tok, 1))
+        # for i in range(B):
+        #     matched_idx[i] = torch.multinomial(topk_mask[i], 1)
+        # matched_mask = torch.zeros_like(topk_mask).scatter(dim=-1, index=matched_idx.long(), value=1)
+        #
+        # # (B, n_tok, H)
+        # matched_RoI_feat = (matched_mask.unsqueeze(-1) * encI.unsqueeze(1)).sum(dim=2)
+        # matched_RoI_feat = (phrase_indices.unsqueeze(-1) * matched_RoI_feat).sum(dim=1)
+        # matched_RoI_feat = matched_RoI_feat / torch.clamp(phrase_indices.sum(dim=1, keepdim=True), min=1)
+        # img_emb = self.deep_set(matched_RoI_feat)
+        #
+        # # (B, hidden)
+        # sent_st = encT[:, 0]
+        # sent_ed = encT[torch.arange(B), lengths - 1]
+        # cap_emb = self.Qs(torch.cat([sent_st, sent_ed], dim=-1))
+
+        return matching_score, [], [], token_mask, mask
+        # return matching_score, img_emb, cap_emb, token_mask, mask
 
     # noinspection PyUnresolvedReferences
     def state_dict(self, destination=None, prefix='', keep_vars=False):

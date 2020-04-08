@@ -18,13 +18,16 @@ from tqdm import tqdm
 import util.logging as logging
 from util.utils import normalize_bboxes, detectGT
 from dataset import FIELD_NAMES, _count_bbox_num
+import spacy
+
+nlp = spacy.load('en_core_web_sm')
 
 logger = logging.getLogger(__name__)
 csv.field_size_limit(sys.maxsize)
 
-feature_suffix = '_n=100'
-feature_suffix = '_10_100-th=0.05'
-# feature_suffix = ''
+# feature_suffix = '_n=100'
+# feature_suffix = '_10_100-th=0.05'
+feature_suffix = ''
 
 
 # noinspection DuplicatedCode
@@ -350,6 +353,17 @@ class Flickr30kEntities(Dataset):
             from models.nlp import bert
             entities = entry['entities']
             tokens, piece2word = bert.tokenize(entry['caption'], plain=False)
+
+            phrase_indices = torch.zeros(self.max_tokens)
+            doc = nlp(entry['caption'])
+            for phrase in doc.noun_chunks:
+                toks, _ = bert.tokenize(phrase.text, plain=True)
+                last_token_idx = lastTokenIndex(tokens, toks)
+                if last_token_idx < self.max_tokens:
+                    phrase_indices[last_token_idx] = 1
+                else:
+                    logging.warning(f'phrase {phrase} not found in {entry["caption"]}')
+
             indices = -torch.ones(self.max_entities, dtype=torch.long)  # padded with -1 up to max_entities
             target = torch.zeros(self.max_entities, self.max_rois)  # padded up to (max_entities x max_rois)
             eTypes = torch.zeros(self.max_entities, len(Flickr30kEntities.ETypes))
@@ -369,7 +383,7 @@ class Flickr30kEntities(Dataset):
 
             # BERT ids, mask and segment by truncating or padding input tokens up to max_tokens
             token_ids, token_seg, token_mask = bert.tensorize(tokens, max_tokens=self.max_tokens)
-            return (token_ids, token_seg, token_mask), indices, target, eTypes
+            return (token_ids, token_seg, token_mask, phrase_indices), indices, target, eTypes
         else:
             # LSTM
             raise NotImplementedError('tokenization for LSTM is not implemented yet')
@@ -378,7 +392,7 @@ class Flickr30kEntities(Dataset):
         entry = self.img_cap_entries[index]
         imgidx = entry['img_idx']
         start, end = self.offsets[imgidx]
-        # global_ctx = self.global_ctx[imgidx]
+        global_ctx = self.global_ctx[imgidx] if feature_suffix else torch.zeros_like(end)
         rois = (end - start).item()
         features = self.features[start:end, :]
         spatials = self.spatials[start:end, :]
@@ -388,9 +402,10 @@ class Flickr30kEntities(Dataset):
         tokens, indices, target, types = self.tensorize(entry)
 
         if self.training:
-            return (features, spatials, mask, *tokens), (indices, target, types)  # (x), (y)
+            return (features, global_ctx, spatials, mask, *tokens), (indices, target, types)  # (x), (y)
         else:
-            return (features, spatials, mask, *tokens), (indices, target, types), entry
+            # for visualization code, which need entry data like caption raw sentence
+            return (features, global_ctx, spatials, mask, *tokens), (indices, target, types), entry
 
     def __len__(self):
         return len(self.img_cap_entries)

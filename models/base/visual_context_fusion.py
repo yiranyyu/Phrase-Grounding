@@ -97,17 +97,18 @@ def center_dist(spatial, mask):
     return distance
 
 
-def gen_nearest_mask(spatial, mask, k) -> torch.Tensor:
+def gen_nearest_mask(spatial, mask, k, dist_func) -> torch.Tensor:
     """
 
     :param k:
+    :param dist_func:
     :param spatial: (B, n_RoI, 6), normalized (x1, y1, x2, y2, w, h)
     :param mask: (B, n_RoI) 1 for RoI, 0 for padding
     :return: (B, n_RoI, n_RoI) mask, 1 for topk nearest RoI. Assured that self-mask is 0, padding-mask is 0
              Since padding and self mask are bound to be 0, number of 1 in a row might be less than k
     """
     B, n_RoI, _ = spatial.shape
-    distance = center_dist(spatial, mask)
+    distance = dist_func(spatial, mask)
     val, idx = distance.topk(k, dim=-1, largest=False)
     topk_mask = torch.zeros_like(distance).scatter(dim=-1, index=idx, src=torch.ones_like(val))
     topk_mask[:, torch.arange(n_RoI), torch.arange(n_RoI)] = 0
@@ -116,34 +117,47 @@ def gen_nearest_mask(spatial, mask, k) -> torch.Tensor:
 
 
 class VisualContextFusion(nn.Module):
-    def __init__(self, cfgI, k=5, use_global=False):
+    def __init__(self, cfgI, k, use_neighbor, use_global, dist_func=center_dist):
         super(VisualContextFusion, self).__init__()
         self.k = k
-        if use_global:
-            self.fc = nn.Linear(cfgI.hidden_size * 3, cfgI.hidden_size)
-        else:
-            self.fc = nn.Linear(cfgI.hidden_size * 2, cfgI.hidden_size)
         logging.info(f'Neighboring k={k}')
 
-    def forward(self, encI, RoI_mask, spatials, global_context=None):
+        self.dist_func = dist_func
+        self.use_global = int(use_global)
+        self.use_neighbor = int(use_neighbor)
+        self.fc = nn.Linear(cfgI.hidden_size * (1 + self.use_neighbor + self.use_global), cfgI.hidden_size)
+
+    def forward(self, encI, RoI_mask, spatials=None, global_ctx=None):
         """
-        :param global_context:
+        :param global_ctx: (B, I_hidden)
         :param encI: (B, n_RoI, I_hidden) Encoded RoI features
         :param RoI_mask: (B, n_RoI) 1 if kth RoI exists
         :param spatials: (B, n_RoI, 6) Spatial feature as normalized (x1, y1, x2, y2, w, h)
         :return: (B, n_RoI, I_hidden) fused RoI features
         """
+        assert global_ctx is not None or not self.use_global
+        assert spatials is not None or not self.use_neighbor
+
         B, n_RoI, I_hidden = encI.shape
+        if spatials is None:
+            if global_ctx is None:
+                return encI
+            else:
+                return self.fc(torch.cat([encI, global_ctx.unsqueeze(1).repeat(1, n_RoI, 1)], dim=-1))
 
         similarity = torch.matmul(encI, encI.transpose(-1, -2))
         similarity[:, torch.arange(n_RoI), torch.arange(n_RoI)] = 0
 
         # 1 for topk nearest RoIs, 0 otherwise
-        topk_mask = gen_nearest_mask(spatials, RoI_mask, self.k)
+        topk_mask = gen_nearest_mask(spatials, RoI_mask, self.k, self.dist_func)
         topk_weight = similarity.where(topk_mask.byte(), torch.zeros_like(similarity))
         topk_weight = topk_weight.softmax(dim=-1).unsqueeze(-1)
 
         neighbor_context = (topk_weight * encI.unsqueeze(1)).sum(dim=2)
-        fused = torch.cat([encI, neighbor_context], dim=-1)
-        # fused = torch.relu(self.fc(fused))
+
+        if global_ctx is None:
+            fused = torch.cat([encI, neighbor_context], dim=-1)
+        else:
+            fused = torch.cat([encI, neighbor_context, global_ctx], dim=-1)
+        fused = self.fc(fused)
         return fused

@@ -6,7 +6,7 @@ import math
 import torch.nn as nn
 from models.base.modal_fusion import MLBFusion, MutanFusion
 from models.NMTree.tree import SingleScore, UpTreeLSTM, DownTreeLSTM, PairScore, build_bitree
-from models.base.visual_context_fusion import VisualContextFusion
+from models.base.visual_context_fusion import VisualContextFusion, center_dist, IoU_dist
 from util import logging
 
 
@@ -23,7 +23,7 @@ def broadcast_to_match(encT, encI, n_tok, n_RoI, B, T_hidden):
 
 
 class AbstractGrounding(nn.Module):
-    def __init__(self, cfgT, cfgI, heads=1):
+    def __init__(self, cfgT, cfgI, heads=1, use_neighbor=False, use_global=False, k=5, dist_func=center_dist):
         super(AbstractGrounding, self).__init__()
         self.cfgT = cfgT
         self.cfgI = cfgI
@@ -36,31 +36,43 @@ class AbstractGrounding(nn.Module):
         self.hidden_size = self.projection
         self.text_hidden_size = cfgT.hidden_size
         self.imag_hidden_size = cfgI.hidden_size
-        logging.info(f'Grounding using {self.__class__.__name__}')
+
+        self.use_neighbor = use_neighbor
+        self.use_global = use_global
+        # self.visual_context_fusion = VisualContextFusion(cfgI, k, self.use_neighbor, self.use_global, dist_func)
+        logging.info(f'Grounding using {self.__class__.__name__}'
+                     f'{"N" if use_neighbor else ""} {"G" if use_global else ""}')
 
 
 class CosineGrounding(AbstractGrounding):
-    def __init__(self, cfgT, cfgI, heads=1):
-        super(CosineGrounding, self).__init__(cfgT, cfgI, heads)
+    def __init__(self, cfgT, cfgI, heads=1, use_neighbor=False, use_global=False, k=5, dist_func=center_dist):
+        super(CosineGrounding, self).__init__(cfgT, cfgI, heads, use_neighbor, use_global, k, dist_func)
 
         self.Q = nn.Linear(cfgT.hidden_size, self.all_head_size)
-        self.K = nn.Linear(cfgI.hidden_size * 2, self.all_head_size)
-        self.visual_context_fusion = VisualContextFusion(cfgI)
+        self.K = nn.Linear(cfgI.hidden_size, self.all_head_size)
+        # self.K_ng = nn.Linear(cfgI.hidden_size, self.all_head_size)
 
     def transpose(self, x):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(*new_x_shape)  # B x #tokens x #heads x head_size
         return x.permute(0, 2, 1, 3)  # B x #heads x # tokens x head_size
 
-    def forward(self, encT, encI, mask, spatials=None):
-        if spatials is not None:
-            encI = self.visual_context_fusion(encI, 1 + (mask[:, 0, 0, :] / 10000), spatials)
+    def forward(self, encT, encI, mask, spatials=None, global_ctx=None):
+        assert global_ctx is not None or not self.use_global
+        assert spatials is not None or not self.use_neighbor
+
+        # neighbor = self.visual_context_fusion(encI, 1 + (mask[:, 0, 0, :] / 10000), spatials, global_ctx)
+        # neighbor = self.K_ng(neighbor)
+        # neighbor = self.transpose(neighbor)
+
         Q = self.Q(encT)
         K = self.K(encI)
         Q = self.transpose(Q)
         K = self.transpose(K)
 
         logits = torch.matmul(Q, K.transpose(-1, -2))
+        # neighbor_logits = torch.matmul(Q, neighbor.transpose(-1, -2))
+        # logits += neighbor_logits
         logits = logits / math.sqrt(self.attention_head_size)
         logits = logits + mask
         return logits.squeeze()

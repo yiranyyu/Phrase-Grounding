@@ -28,7 +28,8 @@ class BCELoss(Metric):
         if len(output) == 3:
             average_loss, E = output[2]
         else:
-            average_loss, E = self._loss_fn(y_pred, y)
+            matching_score, img_emb, cap_emb, token_mask, mask = y_pred
+            average_loss, E = self._loss_fn(matching_score, y, mask, token_mask, cap_emb, img_emb)
 
         assert average_loss.dim() == 0, "loss_fn() did not return the average loss."
 
@@ -65,7 +66,8 @@ class EntityRecall(Metric):
 
     def update(self, output):
         (y_pred, y) = output[:2]
-        N, TPs, (typeTPs, typeN) = bert.recall(y_pred, y, topk=self.topk, typeN=self.typeN)
+        logits = y_pred[0]
+        N, TPs, (typeTPs, typeN) = bert.recall(logits, y, topk=self.topk, typeN=self.typeN)
         self._N += N
         self._TPs += TPs
         self._typeTPs += typeTPs
@@ -129,7 +131,8 @@ def create_supervised_trainer(
         model.train()
         x, y = prepare_batch(batch, device=device, non_blocking=non_blocking)
         y_pred = model(x)
-        loss, E = loss_fn(y_pred, y)
+        matching_score, img_emb, cap_emb, token_mask, mask = y_pred
+        loss, E = loss_fn(matching_score, y, mask, token_mask, cap_emb, img_emb)
         loss = loss / grad_acc_steps
         loss.backward()
         if engine.state.iteration % grad_acc_steps == 0:
